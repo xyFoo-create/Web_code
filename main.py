@@ -27,7 +27,7 @@ def load_data(uploaded_file):
 # 单元格操作函数
 def operation_cell(df, cell_id):
     st.write(f"操作单元格 {cell_id + 1}")
-    operation = st.selectbox("选择操作", ["数据清洗", "可视化", "K-Means 聚类", "主成分分析"], key=f"operation_{cell_id}")
+    operation = st.selectbox("选择操作", ["数据清洗", "可视化", "K-Means 聚类", "主成分分析","二分类Logistic回归"], key=f"operation_{cell_id}")
 
     # 用于保存操作结果的字典
     if f"output_{cell_id}" not in st.session_state:
@@ -148,6 +148,88 @@ def operation_cell(df, cell_id):
                     st.error(f"主成分分析时出错: {e}")
         else:
             st.info("请选择至少一列用于主成分分析")
+
+    elif operation == "二分类Logistic回归":
+        st.subheader("二分类Logistic回归")
+
+        import statsmodels.formula.api as smf
+        import statsmodels.api as sm
+        from scipy.stats import norm
+        import numpy as np
+
+        # 选择用于回归的列
+        columns = df.select_dtypes(include=['float64', 'int', 'string']).columns.tolist()
+        dependent_variable = st.multiselect("选择因变量", columns, key=f"dependent_variable_{cell_id}")
+        if len(dependent_variable)!=1:
+            st.info("请选择一列作为因变量")
+        independent_variable = st.multiselect("选择自变量", columns, key=f"independent_variable_{cell_id}")
+        df[dependent_variable]=df[dependent_variable].astype('float')
+        df[independent_variable]=df[independent_variable].astype('float')
+        x = '+'.join(independent_variable)
+        y = dependent_variable[0]
+
+        if independent_variable:
+
+            #模型拟合
+            if st.button("执行二分类Logistic回归", key=f"train_{cell_id}"):
+                try:
+                    def logistic_regression(y,x,df):
+                        model = smf.glm(formula = f'{y} ~ {x}',
+                                        data = df,
+                                        family=sm.families.Binomial()).fit()  
+                        results_as_html = model.summary().tables[1].as_html()
+                        result = pd.read_html(results_as_html, header=0, index_col=0)[0]
+                        st.session_state[f"output_{cell_id}"].append(("dataframe", result))
+                    logistic_regression(y=y,x=x,df=df)
+                except Exception as e:
+                    st.error(f"Logistic回归时出错: {e}")
+
+            #计算OR值
+            if st.button("计算OR值", key=f"OR_{cell_id}"):
+                try:
+                    def OR(y,x,df):
+                        model = smf.glm(formula = f'{y} ~ {x}',
+                                        data = df,
+                                        family=sm.families.Binomial()).fit()  
+                        stat = pd.DataFrame({'p': model.pvalues,                      
+                                             'OR': np.exp(model.params), 
+                                            'OR_lower_ci': np.exp(model.params - norm.ppf(0.975)*model.bse),
+                                            'OR_upper_ci': np.exp(model.params + norm.ppf(0.975)*model.bse)}) 
+                        stat['sig'] = stat.apply(lambda x : "*" if x['p']<0.05 else "no_sig",axis=1)
+                        stat= stat.sort_values('OR', ascending=True)                            
+                        st.session_state[f"output_{cell_id}"].append(("dataframe", stat))
+                    OR(y=y,x=x,df=df)
+                except Exception as e:
+                    st.error(f"计算OR值时出错: {e}")
+
+            #绘制OR森林图
+            if st.button("绘制OR森林图", key=f"OR_plot_{cell_id}"):
+                try:
+                    def OR_plot(y,x,df):
+                        model = smf.glm(formula = f'{y} ~ {x}',
+                                        data = df,
+                                        family=sm.families.Binomial()).fit()  
+                        stat = pd.DataFrame({'p': model.pvalues,                      
+                                             'OR': np.exp(model.params), 
+                                            'OR_lower_ci': np.exp(model.params - norm.ppf(0.975)*model.bse),
+                                            'OR_upper_ci': np.exp(model.params + norm.ppf(0.975)*model.bse)}) 
+                        stat['sig'] = stat.apply(lambda x : "*" if x['p']<0.05 else "no_sig",axis=1)
+                        stat= stat.sort_values('OR', ascending=True)                            
+                        forest_df = stat.drop("Intercept")\
+                                        .reset_index()\
+                                        .rename(columns={'index': 'independent_var'})\
+                                        .sort_values('OR', ascending=False)
+                        from plotnine import ggplot,aes,geom_point,geom_errorbarh,scale_color_manual,scale_y_discrete,guides,guide_legend,labs,geom_vline,theme_minimal,theme,element_text
+                        forest = ggplot(forest_df , 
+                                        aes(y='independent_var', x='OR')) + geom_point(aes(color='sig'),size=2) + geom_errorbarh(aes(xmin='OR_lower_ci', xmax='OR_upper_ci',color ='sig'), height=0.1) + scale_color_manual(values = ["red","black"]) + scale_y_discrete(limits= forest_df["independent_var"]) + guides(color=guide_legend(reverse=True))+labs(title='logistic Regression', x='OR', y='variable')+geom_vline(xintercept=1, linetype='dashed', color='black')+theme_minimal()+theme(plot_title=element_text(hjust=0.5))
+                        st.pyplot(ggplot.draw(forest)) 
+                    OR_plot(y=y,x=x,df=df)
+                except Exception as e:
+                    st.error(f"绘制OR森林图时出错: {e}")
+
+        else:
+            st.info("请选择至少一列作为自变量")
+        
 
     # 显示已保存的结果
     for result_type, content in st.session_state[f"output_{cell_id}"]:
